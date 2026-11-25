@@ -4,8 +4,8 @@ x-linuxio-stack:
 services:
   gpu-governor:
     # Switches the Radeon 760M to its high clock while it is busy (Immich ML on ROCm) and back to
-    # "auto" after 5 idle minutes. See governor.sh for the reasoning and the thresholds.
-    # Stopping the container puts the GPU back on "auto".
+    # "auto" after 60 idle seconds (IDLE_SECONDS below). See governor.sh for the reasoning and the
+    # thresholds. Stopping the container puts the GPU back on "auto".
     image: alpine:3
     container_name: gpu-governor
     command: ["sh", "/governor.sh"]
@@ -29,10 +29,10 @@ services:
     volumes:
       - ./governor.sh:/governor.sh:ro
       - /etc/localtime:/etc/localtime:ro
-      # Only the two GPU files it needs. card0 is this machine's only GPU (Radeon 760M, PCI c3:00.0);
-      # the stable /sys/devices/pci... path can't be used because its colons break Docker's
-      # source:target volume format. Mounted outside /sys on purpose: Docker's AppArmor profile
-      # blocks writes under /sys.
+      # Only the two GPU files it needs. card0 is this machine's only GPU (Radeon 760M, PCI c3:00.0).
+      # The stable /sys/devices/pci... path has colons, which this short source:target form rejects;
+      # the long form (type: bind, source, target) accepts it. Mounted outside /sys on purpose:
+      # Docker's AppArmor profile blocks writes under /sys.
       - /sys/class/drm/card0/device/gpu_busy_percent:/gpu/gpu_busy_percent:ro
       - /sys/class/drm/card0/device/power_dpm_force_performance_level:/gpu/power_dpm_force_performance_level
     labels:
