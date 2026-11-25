@@ -21,7 +21,7 @@ trap cleanup EXIT
 busy=$test_root/gpu_busy_percent
 level=$test_root/power_dpm_force_performance_level
 log=$test_root/log
-export BUSY_FILE=$busy LEVEL_FILE=$level INTERVAL=1 BUSY_PCT=20 BUSY_SAMPLES=2 IDLE_PCT=10 IDLE_SECONDS=2
+export BUSY_FILE=$busy LEVEL_FILE=$level INTERVAL=1 BUSY_PCT=20 BUSY_SAMPLES=2 IDLE_PCT=10 IDLE_SECONDS=2 READ_FAILS=2
 
 ok() { printf ' %s %s\n' "$ok_tag" "$1"; }
 fail() {
@@ -92,3 +92,22 @@ pid=''
 [[ $status -eq 0 ]] || fail "exited $status on TERM, expected 0"
 [[ $(<"$level") == auto ]] || fail "level is '$(<"$level")' after TERM, expected 'auto'"
 ok 'puts the level back to auto and exits 0 on TERM'
+
+# A busy file that disappears mid-run, as after a driver reload: exits 1 so Docker restarts it.
+echo 50 >"$busy"
+sh "$gov" >"$log" 2>&1 &
+pid=$!
+level_becomes high 'busy before the file goes'
+rm -- "$busy"
+for ((i = 0; i < 50; i++)); do
+	kill -0 "$pid" 2>/dev/null || break
+	sleep 0.1
+done
+kill -0 "$pid" 2>/dev/null && fail 'still running 5s after the busy file went'
+status=0
+wait "$pid" || status=$?
+pid=''
+[[ $status -eq 1 ]] || fail "exited $status after failed reads, expected 1"
+grep -q 'failed reads' "$log" || fail 'no error for the failed reads'
+[[ $(<"$level") == auto ]] || fail "level is '$(<"$level")' after failed reads, expected 'auto'"
+ok 'puts the level back to auto and exits 1 after failed reads in a row'

@@ -6,9 +6,12 @@ services:
     # Switches the Radeon 760M to its high clock while it is busy (Immich ML on ROCm) and back to
     # "auto" after 60 idle seconds (IDLE_SECONDS below). See governor.sh for the reasoning and the
     # thresholds. Stopping the container puts the GPU back on "auto".
-    image: alpine:3
+    # Built from the Dockerfile, which bakes in governor.sh. pull_policy: build rebuilds on every
+    # "up" (cached, so cheap), so an edited governor.sh takes effect as the old bind mount did.
+    build: .
+    image: gpu-governor:local
+    pull_policy: build
     container_name: gpu-governor
-    command: ["sh", "/governor.sh"]
     restart: unless-stopped
     stop_grace_period: 10s
     network_mode: none
@@ -26,8 +29,8 @@ services:
       BUSY_SAMPLES: "3"
       IDLE_PCT: "10"
       IDLE_SECONDS: "60"
+      READ_FAILS: "5"     # failed reads in a row (10 s at INTERVAL 2) before exiting to restart
     volumes:
-      - ./governor.sh:/governor.sh:ro
       - /etc/localtime:/etc/localtime:ro
       # Only the two GPU files it needs. card0 is this machine's only GPU (Radeon 760M, PCI c3:00.0).
       # The stable /sys/devices/pci... path has colons, which this short source:target form rejects;

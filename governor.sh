@@ -15,6 +15,10 @@ BUSY_PCT=${BUSY_PCT:-20}          # a sample at or above this counts as busy
 BUSY_SAMPLES=${BUSY_SAMPLES:-3}   # consecutive busy samples before switching to high
 IDLE_PCT=${IDLE_PCT:-10}          # a sample below this counts as idle
 IDLE_SECONDS=${IDLE_SECONDS:-300} # continuous idle time before switching back to auto
+# Failed reads of either file in a row before exiting 1, so the restart policy mounts them again.
+# A driver reload or GPU reset can leave the bind mounts pointing at sysfs files that are gone.
+# A read that works but is not a number still counts as idle, not as a failure.
+READ_FAILS=${READ_FAILS:-5}
 
 log() { echo "$(date '+%F %T') $*"; }
 set_level() {
@@ -24,7 +28,7 @@ set_level() {
 }
 stop() {
 	set_level auto
-	exit 0
+	exit "${1:-0}"
 }
 trap stop TERM INT
 
@@ -40,10 +44,17 @@ log "started: high after ${BUSY_SAMPLES}x${INTERVAL}s at >=${BUSY_PCT}% busy, au
 set_level auto
 busy_n=0
 idle_s=0
+fails=0
 while :; do
-	b=$(cat "$BUSY" 2>/dev/null)
+	read_ok=1
+	b=$(cat "$BUSY" 2>/dev/null) || read_ok=0
 	case $b in '' | *[!0-9]*) b=0 ;; esac
-	cur=$(cat "$LEVEL" 2>/dev/null)
+	cur=$(cat "$LEVEL" 2>/dev/null) || read_ok=0
+	if [ "$read_ok" = 1 ]; then fails=0; else fails=$((fails + 1)); fi
+	if [ "$fails" -ge "$READ_FAILS" ]; then
+		log "ERROR: $fails failed reads of $BUSY or $LEVEL in a row, exiting to be restarted"
+		stop 1
+	fi
 	if [ "$b" -ge "$BUSY_PCT" ]; then busy_n=$((busy_n + 1)); else busy_n=0; fi
 	if [ "$b" -lt "$IDLE_PCT" ]; then idle_s=$((idle_s + INTERVAL)); else idle_s=0; fi
 	if [ "$cur" != high ] && [ "$busy_n" -ge "$BUSY_SAMPLES" ]; then
