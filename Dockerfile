@@ -6,6 +6,10 @@ LABEL org.opencontainers.image.title="gpu-governor" \
 	org.opencontainers.image.source="https://github.com/mordilloSan/amdgpu-boost" \
 	org.opencontainers.image.licenses="MIT"
 
+# Zone data, so TZ=Region/City works for the log timestamps. Without TZ, the time zone comes from
+# a mounted /etc/localtime, or is UTC.
+RUN apk add --no-cache tzdata
+
 # Owned by root, so the user below can run the script but not change it.
 COPY governor.sh /usr/local/bin/governor.sh
 

@@ -32,7 +32,9 @@ services:
       IDLE_PCT: "10"
       IDLE_SECONDS: "60"
       READ_FAILS: "5"     # failed reads in a row (10 s at INTERVAL 2) before exiting to restart
+      # TZ: Region/City   # time zone for the log timestamps; overrides the /etc/localtime mount
     volumes:
+      # The host's time zone for the log timestamps, unless TZ is set.
       - /etc/localtime:/etc/localtime:ro
       # Only the two GPU files it needs. card0 is this machine's only GPU (Radeon 760M, PCI c3:00.0).
       # The stable /sys/devices/pci... path has colons, which this short source:target form rejects;
