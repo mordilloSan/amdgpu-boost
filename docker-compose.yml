@@ -6,11 +6,10 @@ services:
     # Switches the Radeon 760M to its high clock while it is busy (Immich ML on ROCm) and back to
     # "auto" after 60 idle seconds (IDLE_SECONDS below). See governor.sh for the reasoning and the
     # thresholds. Stopping the container puts the GPU back on "auto".
-    # Built from the Dockerfile, which bakes in governor.sh. pull_policy: build rebuilds on every
-    # "up" (cached, so cheap), so an edited governor.sh takes effect as the old bind mount did.
-    build: .
-    image: gpu-governor:local
-    pull_policy: build
+    # The release workflow publishes this image from the Dockerfile. Pinned to a release, so a
+    # push cannot change what runs here; each dev/vX.Y.Z branch bumps the tag to its own version.
+    # To try local changes: make image, then set image: gpu-governor:dev.
+    image: ghcr.io/mordillosan/amdgpu-boost:v1.1.0
     container_name: gpu-governor
     restart: unless-stopped
     stop_grace_period: 10s

@@ -1,4 +1,4 @@
-.PHONY: help check test docker-test
+.PHONY: help check test docker-test image
 .DEFAULT_GOAL := help
 
 # Read here, before any include, so it names this file even when MAKEFILES loads others.
@@ -35,3 +35,7 @@ IMAGE := $(shell awk '$$1 == "FROM" {print $$2; exit}' Dockerfile)
 docker-test: ## Run the tests in the Dockerfile's base image, so governor.sh runs under BusyBox sh
 	@docker run --rm -v "$(CURDIR):/src:ro" -w /src $(IMAGE) \
 		sh -c 'apk add --no-cache --quiet bash >/dev/null && bash test'
+
+image: ## Build the image as gpu-governor:dev (CI builds it on every PR)
+	@docker build --quiet --tag gpu-governor:dev . >/dev/null
+	@echo ' $(ok) docker build: gpu-governor:dev'

@@ -1,4 +1,5 @@
-# Runs make check and make test. The main ruleset requires this job's check,
+# Runs make check and make test, and builds the image so a broken Dockerfile fails here
+# rather than in the release workflow after the merge. The main ruleset requires this job's check,
 # reported as "check", so keep the job id and add no job name.
 
 name: Check
@@ -32,3 +33,5 @@ jobs:
         run: make check
       - name: Test behavior
         run: make test
+      - name: Build image
+        run: make image

@@ -8,6 +8,7 @@ on:
 permissions:
   checks: read
   contents: write
+  packages: write # push the image to ghcr.io
   pull-requests: read
 
 jobs:
@@ -29,15 +30,42 @@ jobs:
           checks=$(gh pr checks "$PR_NUMBER" --repo "$GITHUB_REPOSITORY" --json bucket,workflow)
           jq -e --arg self "$GITHUB_WORKFLOW" '[.[] | select(.workflow != $self)] |
             length > 0 and all(.[]; .bucket == "pass" or .bucket == "skipping")' <<< "$checks"
+      - name: Read the release tag
+        id: version
+        env:
+          RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
+        run: |
+          [[ "$RELEASE_BRANCH" =~ ^dev/v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]
+          printf 'tag=%s\n' "${RELEASE_BRANCH#dev/}" >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.pull_request.merge_commit_sha }}
+          persist-credentials: false
+      # Before the release, so a failed push leaves no release without its image.
+      # docker-compose.yml pulls ghcr.io/<owner>/<repo>:<tag>; prereleases do not move latest.
+      - name: Publish image
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+          MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
+        run: |
+          image=ghcr.io/${GITHUB_REPOSITORY,,}
+          tags=(--tag "$image:$TAG")
+          [[ "$TAG" == *-* ]] || tags+=(--tag "$image:latest")
+          docker login ghcr.io --username "$GITHUB_ACTOR" --password-stdin <<< "$GH_TOKEN"
+          docker build "${tags[@]}" \
+            --label "org.opencontainers.image.version=$TAG" \
+            --label "org.opencontainers.image.revision=$MERGE_SHA" .
+          docker push --all-tags "$image"
+          docker logout ghcr.io
       - name: Publish release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_BRANCH: ${{ github.event.pull_request.head.ref }}
+          TAG: ${{ steps.version.outputs.tag }}
           MERGE_SHA: ${{ github.event.pull_request.merge_commit_sha }}
           PR_BODY: ${{ github.event.pull_request.body }}
         run: |
-          [[ "$RELEASE_BRANCH" =~ ^dev/v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]]
-          tag=${RELEASE_BRANCH#dev/}
+          tag=$TAG
           release_args=()
           [[ "$tag" == *-* ]] && release_args+=(--prerelease)
           # The release PR body holds the grouped changelog written by open-pr.
