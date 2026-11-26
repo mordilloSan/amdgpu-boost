@@ -2,11 +2,16 @@
 set -euo pipefail
 # Runs governor.sh under sh against plain files that stand in for the two sysfs files, with a
 # 1-second interval, and checks each switch it should (and should not) make.
+# Needs a non-root user: root ignores file modes, and two cases depend on them.
 # The status tag, coloured only on a terminal and never with NO_COLOR set.
 if [[ -t 1 && -z ${NO_COLOR-} ]]; then
 	ok_tag=$'\033[90m[\033[38;5;154m  OK  \033[90m]\033[0m'
 else
 	ok_tag='[  OK  ]'
+fi
+if [[ $EUID -eq 0 ]]; then
+	printf ' [FAIL] run the tests as a non-root user: root ignores file modes\n' >&2
+	exit 1
 fi
 
 script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
@@ -21,7 +26,7 @@ trap cleanup EXIT
 busy=$test_root/gpu_busy_percent
 level=$test_root/power_dpm_force_performance_level
 log=$test_root/log
-export BUSY_FILE=$busy LEVEL_FILE=$level INTERVAL=1 BUSY_PCT=20 BUSY_SAMPLES=2 IDLE_PCT=10 IDLE_SECONDS=2
+export BUSY_FILE=$busy LEVEL_FILE=$level INTERVAL=1 BUSY_PCT=20 BUSY_SAMPLES=2 IDLE_PCT=10 IDLE_SECONDS=2 READ_FAILS=2
 
 ok() { printf ' %s %s\n' "$ok_tag" "$1"; }
 fail() {
@@ -30,6 +35,46 @@ fail() {
 	exit 1
 }
 gov=$script_dir/governor.sh
+# Replaces the busy file in one step, so the governor never reads it half-written.
+set_busy() {
+	printf '%s\n' "$1" >"$busy.tmp"
+	mv -f -- "$busy.tmp" "$busy"
+}
+# Starts the governor in the background; variables set before the call override the settings.
+start_gov() {
+	: >"$log"
+	sh "$gov" >"$log" 2>&1 &
+	pid=$!
+	log_has 'started:' 'start line'
+}
+# Polls for up to 5 seconds until the log has a line matching $1.
+log_has() {
+	local i
+	for ((i = 0; i < 50; i++)); do
+		grep -q -- "$1" "$log" && return 0
+		sleep 0.1
+	done
+	fail "no log line matching '$1' after 5s ($2)"
+}
+alive() { kill -0 "$pid" 2>/dev/null || fail "governor exited ($1)"; }
+# Waits up to 5 seconds for the governor to exit and checks its status is $1.
+exits_with() {
+	local i status=0
+	for ((i = 0; i < 50; i++)); do
+		kill -0 "$pid" 2>/dev/null || break
+		sleep 0.1
+	done
+	kill -0 "$pid" 2>/dev/null && fail "still running after 5s ($2)"
+	wait "$pid" || status=$?
+	pid=''
+	[[ $status -eq $1 ]] || fail "exited $status, expected $1 ($2)"
+}
+# Sends TERM and checks for a clean exit with the level back on auto.
+stop_gov() {
+	kill -TERM "$pid"
+	exits_with 0 'TERM'
+	[[ $(<"$level") == auto ]] || fail "level is '$(<"$level")' after TERM, expected 'auto'"
+}
 # Polls for up to 5 seconds until the level file reads $1.
 level_becomes() {
 	local i
@@ -39,56 +84,123 @@ level_becomes() {
 	done
 	fail "level is '$(<"$level")' after 5s, expected '$1' ($2)"
 }
-# Fails if the level file stops reading $1 within $2 seconds.
+# Fails if the level file stops reading $1 within $2 tenths of a second.
 level_stays() {
 	local i
-	for ((i = 0; i < $2 * 10; i++)); do
+	for ((i = 0; i < $2; i++)); do
 		[[ $(<"$level") == "$1" ]] || fail "level changed to '$(<"$level")', expected it to stay '$1' ($3)"
 		sleep 0.1
 	done
 }
 
-# Startup checks: both refuse to run and exit 1.
-echo 0 >"$busy"
+# The healthcheck: exit status only, and it never touches the level file.
+health() { sh "$gov" health >"$log" 2>&1; }
+set_busy 42
+echo high >"$level"
+health || fail 'unhealthy with good files'
+[[ -s $log ]] && fail 'healthcheck printed output'
+[[ $(<"$level") == high ]] || fail 'healthcheck changed the level file'
+sh "$script_dir/entrypoint.sh" health || fail 'unhealthy through the entrypoint as a non-root user'
+set_busy 'not a number'
+if health; then fail 'healthy with a busy file that is not a number'; fi
+rm -- "$busy"
+if health; then fail 'healthy without a busy file'; fi
+set_busy 42
+chmod 444 "$level"
+if health; then fail 'healthy with a level file that is not writable'; fi
+chmod 644 "$level"
+mv -- "$level" "$level.away"
+if health; then fail 'healthy without a level file'; fi
+mv -- "$level.away" "$level"
+ok 'healthcheck (also through the entrypoint) fails on a bad busy reading or an unreadable or unwritable file'
+
+# Startup checks: each refuses to run and exits 1.
+set_busy 0
 echo auto >"$level"
 if BUSY_FILE=$test_root/missing sh "$gov" >"$log" 2>&1; then fail 'started without a busy file'; fi
 grep -q 'cannot read' "$log" || fail 'no error for a missing busy file'
 ok 'exits when the busy file is unreadable'
-if LEVEL_FILE=$test_root/missing/level sh "$gov" >"$log" 2>&1; then fail 'started without a writable level file'; fi
-grep -q 'is not writable' "$log" || fail 'no error for an unwritable level file'
-ok 'exits when the level file is not writable'
+if LEVEL_FILE=$test_root/missing/level sh "$gov" >"$log" 2>&1; then fail 'started without a level file'; fi
+grep -q 'is not writable' "$log" || fail 'no error for a missing level file'
+chmod 444 "$level"
+if sh "$gov" >"$log" 2>&1; then fail 'started with a read-only level file'; fi
+grep -q 'is not writable by uid' "$log" || fail 'no error for a read-only level file'
+chmod 644 "$level"
+ok 'exits when the level file is missing or not writable'
 
 # A run through each switch.
 echo high >"$level"
-sh "$gov" >"$log" 2>&1 &
-pid=$!
+start_gov
 level_becomes auto 'reset at start'
 grep -q 'started: high after 2x1s' "$log" || fail 'no start line with the settings'
 ok 'resets the level to auto at start'
 
-echo 50 >"$busy"
+set_busy 50
 level_becomes high 'two busy samples'
 ok 'switches to high after the busy samples'
 
-echo 15 >"$busy"
-level_stays high 4 'load between IDLE_PCT and BUSY_PCT is not idle'
+set_busy 15
+level_stays high 40 'load between IDLE_PCT and BUSY_PCT is not idle'
 ok 'stays high while load is between the thresholds'
 
-echo 'not a number' >"$busy"
+set_busy 'not a number'
 level_becomes auto 'unreadable sample counts as idle'
 ok 'switches back to auto after the idle time (bad readings count as idle)'
 
-echo 50 >"$busy"
+set_busy 50
 level_becomes high 'busy again'
-kill -TERM "$pid"
-for ((i = 0; i < 30; i++)); do
-	kill -0 "$pid" 2>/dev/null || break
-	sleep 0.1
-done
-kill -0 "$pid" 2>/dev/null && fail 'still running 3s after TERM'
-status=0
-wait "$pid" || status=$?
-pid=''
-[[ $status -eq 0 ]] || fail "exited $status on TERM, expected 0"
-[[ $(<"$level") == auto ]] || fail "level is '$(<"$level")' after TERM, expected 'auto'"
+stop_gov
 ok 'puts the level back to auto and exits 0 on TERM'
+
+# Busy stretches of 2-3 samples split by a quiet one: never 4 in a row, so it stays auto.
+# Without the reset the stretches add up to 4 or more and it switches to high.
+set_busy 0
+BUSY_SAMPLES=4 start_gov
+set_busy 50
+level_stays auto 25 'first busy stretch'
+set_busy 15
+level_stays auto 25 'quiet stretch'
+set_busy 50
+level_stays auto 25 'second busy stretch, counted from 0 again'
+level_becomes high 'busy for 4 samples in a row'
+stop_gov
+ok 'a quiet sample resets the busy count'
+
+# A level file that cannot be written: logs, keeps running, and switches once it can.
+set_busy 0
+start_gov
+chmod 444 "$level"
+set_busy 50
+log_has "cannot write 'high'" 'read-only level file'
+alive 'after a failed write'
+[[ $(<"$level") == auto ]] || fail "level is '$(<"$level")' after a failed write, expected 'auto'"
+chmod 644 "$level"
+level_becomes high 'level file writable again'
+stop_gov
+ok 'logs a failed write, keeps running, and switches once the write works'
+
+# Stretches of 2-3 failed reads split by good ones: never 4 in a row, so it keeps running.
+# Without the reset the failures add up to 4 or more and it exits.
+set_busy 0
+READ_FAILS=4 start_gov
+rm -- "$busy"
+sleep 2.5
+alive 'first stretch of failed reads'
+set_busy 0
+sleep 2.5
+rm -- "$busy"
+sleep 2.5
+alive 'second stretch of failed reads, counted from 0 again'
+set_busy 0
+stop_gov
+ok 'a good read resets the failed-read count'
+
+# A busy file that disappears mid-run, as after a driver reload: exits 1 so Docker restarts it.
+set_busy 50
+start_gov
+level_becomes high 'busy before the file goes'
+rm -- "$busy"
+exits_with 1 'failed reads'
+grep -q 'failed reads' "$log" || fail 'no error for the failed reads'
+[[ $(<"$level") == auto ]] || fail "level is '$(<"$level")' after failed reads, expected 'auto'"
+ok 'puts the level back to auto and exits 1 after failed reads in a row'

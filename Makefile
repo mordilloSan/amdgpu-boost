@@ -1,9 +1,9 @@
-.PHONY: help check test docker-test
+.PHONY: help check test docker-test image smoke
 .DEFAULT_GOAL := help
 
 # Read here, before any include, so it names this file even when MAKEFILES loads others.
 THIS_MAKEFILE := $(lastword $(MAKEFILE_LIST))
-SHELL_FILES := governor.sh test
+SHELL_FILES := governor.sh entrypoint.sh test smoke
 
 # The status tag, coloured only on a terminal and never with NO_COLOR set.
 ifeq ($(NO_COLOR)$(if $(MAKE_TERMOUT),,plain),)
@@ -29,9 +29,18 @@ check: ## Lint the scripts, compose file and workflows (shellcheck, shfmt, compo
 test: ## Run governor.sh against fake sysfs files
 	@bash test
 
-# The image governor.sh runs in, read from docker-compose.yml so the two stay the same.
-IMAGE := $(shell awk '$$1 == "image:" {print $$2; exit}' docker-compose.yml)
+# The base image governor.sh runs in, read from the Dockerfile so the two stay the same.
+IMAGE := $(shell awk '$$1 == "FROM" {print $$2; exit}' Dockerfile)
 
-docker-test: ## Run the tests in the compose image, so governor.sh runs under BusyBox sh
+# As uid 10001, the governor's default user: the tests need a non-root user, since root ignores
+# file modes.
+docker-test: ## Run the tests in the Dockerfile's base image, so governor.sh runs under BusyBox sh
 	@docker run --rm -v "$(CURDIR):/src:ro" -w /src $(IMAGE) \
-		sh -c 'apk add --no-cache --quiet bash >/dev/null && bash test'
+		sh -c 'apk add --no-cache --quiet bash su-exec >/dev/null && exec su-exec 10001:10001 bash test'
+
+image: ## Build the image as gpu-governor:dev (CI builds it on every PR)
+	@docker build --quiet --tag gpu-governor:dev . >/dev/null
+	@echo ' $(ok) docker build: gpu-governor:dev'
+
+smoke: image ## Run the built image with the compose sandbox against fake GPU files
+	@bash smoke

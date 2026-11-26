@@ -6,28 +6,41 @@ services:
     # Switches the Radeon 760M to its high clock while it is busy (Immich ML on ROCm) and back to
     # "auto" after 60 idle seconds (IDLE_SECONDS below). See governor.sh for the reasoning and the
     # thresholds. Stopping the container puts the GPU back on "auto".
-    image: alpine:3
+    # The release workflow publishes this image from the Dockerfile. Pinned to a release, so a
+    # push cannot change what runs here; each dev/vX.Y.Z branch bumps the tag to its own version.
+    # To try local changes: make image, then set image: gpu-governor:dev.
+    image: ghcr.io/mordillosan/amdgpu-boost:v1.1.0
     container_name: gpu-governor
-    command: ["sh", "/governor.sh"]
     restart: unless-stopped
     stop_grace_period: 10s
     network_mode: none
+    ipc: none
     read_only: true
-    user: "0:0"   # the sysfs file is root-owned (0644); owner write needs no capabilities
+    # Starts as root with only these three capabilities: the entrypoint chowns the level file to
+    # PUID, then runs the governor as PUID:PGID, which clears them all. Do not set user: here, or
+    # the entrypoint cannot hand the file over.
     cap_drop:
       - ALL
+    cap_add:
+      - CHOWN
+      - SETUID
+      - SETGID
     security_opt:
       - no-new-privileges:true
     mem_limit: 32m
     pids_limit: 16
     environment:
+      PUID: "10001"       # uid:gid the governor runs as; must not be an account on the host
+      PGID: "10001"
       INTERVAL: "2"
       BUSY_PCT: "20"
       BUSY_SAMPLES: "3"
       IDLE_PCT: "10"
       IDLE_SECONDS: "60"
+      READ_FAILS: "5"     # failed reads in a row (10 s at INTERVAL 2) before exiting to restart
+      # TZ: Region/City   # time zone for the log timestamps; overrides the /etc/localtime mount
     volumes:
-      - ./governor.sh:/governor.sh:ro
+      # The host's time zone for the log timestamps, unless TZ is set.
       - /etc/localtime:/etc/localtime:ro
       # Only the two GPU files it needs. card0 is this machine's only GPU (Radeon 760M, PCI c3:00.0).
       # The stable /sys/devices/pci... path has colons, which this short source:target form rejects;

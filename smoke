@@ -1,0 +1,79 @@
+#!/usr/bin/env bash
+set -euo pipefail
+# Runs the built image (gpu-governor:dev, from make image) with docker-compose.yml's own sandbox
+# settings, with plain files mounted in place of the two sysfs files, and checks what only a real
+# container shows: the entrypoint hands the level file to uid 10001, the governor runs as 10001
+# with no capabilities, the healthcheck passes, and a stop puts the level back on auto.
+if [[ -t 1 && -z ${NO_COLOR-} ]]; then
+	ok_tag=$'\033[90m[\033[38;5;154m  OK  \033[90m]\033[0m'
+else
+	ok_tag='[  OK  ]'
+fi
+
+script_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+test_root=$(mktemp -d /tmp/amdgpu-boost-smoke.XXXXXX)
+busy=$test_root/gpu_busy_percent
+level=$test_root/power_dpm_force_performance_level
+name=gpu-governor-smoke
+compose=(docker compose --project-name amdgpu-boost-smoke
+	-f "$script_dir/docker-compose.yml" -f "$test_root/override.yml")
+cleanup() {
+	"${compose[@]}" down --timeout 1 >/dev/null 2>&1 || true
+	rm -rf -- "$test_root"
+}
+trap cleanup EXIT
+
+ok() { printf ' %s %s\n' "$ok_tag" "$1"; }
+fail() {
+	printf ' [FAIL] %s\n' "$1" >&2
+	docker logs "$name" 2>&1 | sed 's/^/   | /' >&2 || true
+	exit 1
+}
+# Polls for up to $2 seconds until the level file reads $1.
+level_becomes() {
+	local i
+	for ((i = 0; i < $2 * 10; i++)); do
+		[[ $(<"$level") == "$1" ]] && return 0
+		sleep 0.1
+	done
+	fail "level is '$(<"$level")' after $2s, expected '$1' ($3)"
+}
+
+echo 0 >"$busy"
+echo high >"$level"
+chmod 644 "$busy" "$level"
+# Same target paths as docker-compose.yml, so these mounts replace the sysfs ones.
+cat >"$test_root/override.yml" <<EOF
+services:
+  gpu-governor:
+    image: gpu-governor:dev
+    container_name: $name
+    volumes:
+      - $busy:/gpu/gpu_busy_percent:ro
+      - $level:/gpu/power_dpm_force_performance_level
+EOF
+"${compose[@]}" up --detach --quiet-pull >/dev/null 2>&1 || fail 'docker compose up failed'
+
+level_becomes auto 10 'reset at start'
+[[ $(stat -c %u "$level") == 10001 ]] || fail "level file owned by uid $(stat -c %u "$level"), expected 10001"
+ok 'the entrypoint hands the level file to uid 10001'
+
+status=$(docker exec "$name" cat /proc/1/status)
+grep -Eq '^Uid:[[:space:]]+10001[[:space:]]+10001[[:space:]]+10001[[:space:]]+10001$' <<<"$status" ||
+	fail "governor is not running as 10001: $(grep '^Uid:' <<<"$status")"
+for cap in CapPrm CapEff CapAmb; do
+	grep -Eq "^$cap:[[:space:]]+0+$" <<<"$status" || fail "governor has capabilities: $(grep "^$cap:" <<<"$status")"
+done
+ok 'the governor runs as 10001 with no capabilities'
+
+docker exec "$name" /bin/sh /usr/local/bin/entrypoint.sh health || fail 'healthcheck failed'
+ok 'the healthcheck passes'
+
+echo 50 >"$busy" # in place: the bind mount follows the inode, not the name
+level_becomes high 15 'busy for BUSY_SAMPLES samples'
+ok 'switches to high when busy'
+
+"${compose[@]}" stop >/dev/null 2>&1
+[[ $(docker inspect -f '{{.State.ExitCode}}' "$name") == 0 ]] || fail 'non-zero exit on stop'
+[[ $(<"$level") == auto ]] || fail "level is '$(<"$level")' after stop, expected 'auto'"
+ok 'puts the level back to auto and exits 0 on stop'
