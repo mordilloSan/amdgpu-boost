@@ -20,6 +20,15 @@ IDLE_SECONDS=${IDLE_SECONDS:-300} # continuous idle time before switching back t
 # A read that works but is not a number still counts as idle, not as a failure.
 READ_FAILS=${READ_FAILS:-5}
 
+# "governor.sh health" is the container healthcheck: healthy (exit 0) while the busy file reads as a
+# number and the level file reads and is writable. It never writes the level file.
+if [ "${1:-}" = health ]; then
+	b=$(cat "$BUSY" 2>/dev/null) || exit 1
+	case $b in '' | *[!0-9]*) exit 1 ;; esac
+	cat "$LEVEL" >/dev/null 2>&1 && [ -w "$LEVEL" ]
+	exit
+fi
+
 log() { echo "$(date '+%F %T') $*"; }
 set_level() {
 	if echo "$1" >"$LEVEL" 2>/dev/null; then
@@ -37,7 +46,7 @@ trap stop TERM INT
 	exit 1
 }
 [ -w "$LEVEL" ] || {
-	log "ERROR: $LEVEL is not writable"
+	log "ERROR: $LEVEL is not writable by uid $(id -u) (install udev/99-amdgpu-boost.rules on the host)"
 	exit 1
 }
 log "started: high after ${BUSY_SAMPLES}x${INTERVAL}s at >=${BUSY_PCT}% busy, auto after ${IDLE_SECONDS}s below ${IDLE_PCT}%"

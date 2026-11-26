@@ -14,8 +14,11 @@ services:
     restart: unless-stopped
     stop_grace_period: 10s
     network_mode: none
+    ipc: none
     read_only: true
-    user: "0:0"   # the sysfs file is root-owned (0644); owner write needs no capabilities
+    # Not root: the host's udev rule (udev/99-amdgpu-boost.rules) chowns the level file to this uid,
+    # so writing it needs no capabilities. Install the rule before the first start.
+    user: "10001:10001"
     cap_drop:
       - ALL
     security_opt:

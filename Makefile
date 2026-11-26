@@ -32,9 +32,10 @@ test: ## Run governor.sh against fake sysfs files
 # The base image governor.sh runs in, read from the Dockerfile so the two stay the same.
 IMAGE := $(shell awk '$$1 == "FROM" {print $$2; exit}' Dockerfile)
 
+# As uid 10001, the image's user: the tests need a non-root user, since root ignores file modes.
 docker-test: ## Run the tests in the Dockerfile's base image, so governor.sh runs under BusyBox sh
 	@docker run --rm -v "$(CURDIR):/src:ro" -w /src $(IMAGE) \
-		sh -c 'apk add --no-cache --quiet bash >/dev/null && bash test'
+		sh -c 'apk add --no-cache --quiet bash su-exec >/dev/null && exec su-exec 10001:10001 bash test'
 
 image: ## Build the image as gpu-governor:dev (CI builds it on every PR)
 	@docker build --quiet --tag gpu-governor:dev . >/dev/null
