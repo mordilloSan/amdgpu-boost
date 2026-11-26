@@ -9,7 +9,7 @@ services:
     # The release workflow publishes this image from the Dockerfile. Pinned to a release, so a
     # push cannot change what runs here; each dev/vX.Y.Z branch bumps the tag to its own version.
     # To try local changes: make image, then set image: gpu-governor:dev.
-    image: ghcr.io/mordillosan/amdgpu-boost:v1.1.0
+    image: ghcr.io/mordillosan/amdgpu-boost:v1.1.1
     container_name: gpu-governor
     restart: unless-stopped
     stop_grace_period: 10s
