@@ -100,6 +100,7 @@ echo high >"$level"
 health || fail 'unhealthy with good files'
 [[ -s $log ]] && fail 'healthcheck printed output'
 [[ $(<"$level") == high ]] || fail 'healthcheck changed the level file'
+sh "$script_dir/entrypoint.sh" health || fail 'unhealthy through the entrypoint as a non-root user'
 set_busy 'not a number'
 if health; then fail 'healthy with a busy file that is not a number'; fi
 rm -- "$busy"
@@ -111,7 +112,7 @@ chmod 644 "$level"
 mv -- "$level" "$level.away"
 if health; then fail 'healthy without a level file'; fi
 mv -- "$level.away" "$level"
-ok 'healthcheck fails on a bad busy reading or an unreadable or unwritable file'
+ok 'healthcheck (also through the entrypoint) fails on a bad busy reading or an unreadable or unwritable file'
 
 # Startup checks: each refuses to run and exits 1.
 set_busy 0

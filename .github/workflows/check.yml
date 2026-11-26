@@ -1,7 +1,8 @@
-# Runs make check, make test and make docker-test, and builds the image so a broken Dockerfile
-# fails here rather than in the release workflow after the merge. On a dev/vX.Y.Z PR it also checks
-# that docker-compose.yml pins the image that release will publish. The main ruleset requires this
-# job's check, reported as "check", so keep the job id and add no job name.
+# Runs make check, make test and make docker-test, then builds and smoke tests the image (make
+# smoke), so a broken image fails here rather than in the release workflow after the merge. On a
+# dev/vX.Y.Z PR it also checks that docker-compose.yml pins the image that release will publish.
+# The main ruleset requires this job's check, reported as "check", so keep the job id and add no
+# job name.
 
 name: Check
 
@@ -47,5 +48,5 @@ jobs:
             echo "::error file=docker-compose.yml::image is '$got', expected '$want' for $BRANCH"
             exit 1
           fi
-      - name: Build image
-        run: make image
+      - name: Build image and smoke test it
+        run: make smoke

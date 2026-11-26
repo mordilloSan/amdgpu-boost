@@ -46,7 +46,7 @@ trap stop TERM INT
 	exit 1
 }
 [ -w "$LEVEL" ] || {
-	log "ERROR: $LEVEL is not writable by uid $(id -u) (install udev/99-amdgpu-boost.rules on the host)"
+	log "ERROR: $LEVEL is not writable by uid $(id -u)"
 	exit 1
 }
 log "started: high after ${BUSY_SAMPLES}x${INTERVAL}s at >=${BUSY_PCT}% busy, auto after ${IDLE_SECONDS}s below ${IDLE_PCT}%"

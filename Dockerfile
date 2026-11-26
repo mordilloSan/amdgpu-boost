@@ -6,23 +6,21 @@ LABEL org.opencontainers.image.title="gpu-governor" \
 	org.opencontainers.image.source="https://github.com/mordilloSan/amdgpu-boost" \
 	org.opencontainers.image.licenses="MIT"
 
-# Zone data, so TZ=Region/City works for the log timestamps. Without TZ, the time zone comes from
-# a mounted /etc/localtime, or is UTC.
-RUN apk add --no-cache tzdata
+# tzdata, so TZ=Region/City works for the log timestamps (without TZ, the time zone comes from a
+# mounted /etc/localtime, or is UTC). su-exec, so the entrypoint can drop from root to PUID:PGID.
+RUN apk add --no-cache su-exec tzdata
 
-# Owned by root, so the user below can run the script but not change it.
-COPY governor.sh /usr/local/bin/governor.sh
+# Owned by root, so the governor, running as PUID, can run the scripts but not change them.
+COPY entrypoint.sh governor.sh /usr/local/bin/
 
-# No account needed: a bare uid with no capabilities. The host's udev rule
-# (udev/99-amdgpu-boost.rules) gives this uid the one sysfs file it writes.
-USER 10001:10001
-
-# The thresholds come from the environment (see governor.sh for the defaults).
-ENTRYPOINT ["/bin/sh", "/usr/local/bin/governor.sh"]
+# Starts as root on purpose: entrypoint.sh chowns the GPU level file to PUID (default 10001), then
+# runs governor.sh as PUID:PGID with no capabilities. docker-compose.yml grants only CHOWN, SETUID
+# and SETGID. The thresholds come from the environment (see governor.sh for the defaults).
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/entrypoint.sh"]
 
 # Unhealthy when the busy file stops reading as a number, or the level file stops reading or
-# being writable. governor.sh exits on failed reads itself; this also catches a busy file that
-# reads garbage, which governor.sh counts as idle. Docker only reports the state, it does not
-# restart on it.
+# being writable by PUID. governor.sh exits on failed reads itself; this also catches a busy file
+# that reads garbage, which governor.sh counts as idle. Docker only reports the state, it does not
+# restart on it. Runs through the entrypoint, so it checks as PUID, not as root.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-	CMD ["/bin/sh", "/usr/local/bin/governor.sh", "health"]
+	CMD ["/bin/sh", "/usr/local/bin/entrypoint.sh", "health"]

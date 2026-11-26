@@ -1,9 +1,0 @@
-# Lets the gpu-governor container, which runs as uid 10001 with no capabilities, write the amdgpu
-# power level file. The kernel creates it as root:root 0644; this hands only that one file to uid
-# 10001 (the mode stays 0644). uid 10001 must not belong to any account on the host.
-# Runs when amdgpu binds to the GPU, at boot and after a driver reload, once the file exists.
-#
-# Install:  sudo install -m 0644 udev/99-amdgpu-boost.rules /etc/udev/rules.d/
-# Apply now without a reboot:
-#   sudo chown 10001 /sys/class/drm/card0/device/power_dpm_force_performance_level
-ACTION=="bind", SUBSYSTEM=="pci", DRIVER=="amdgpu", RUN+="/bin/chown 10001 /sys%p/power_dpm_force_performance_level"
